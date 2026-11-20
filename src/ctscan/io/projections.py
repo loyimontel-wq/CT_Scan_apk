@@ -176,3 +176,23 @@ def validate_scan(scan_directory: str | Path, angle_file: str | Path, strict: bo
 
     files = find_projection_files(scan_directory)
     angle_data =read_angles(angle_file)
+    projection_set = match_projections(files, angle_data)
+
+    has_duplicates = bool(projection_set.duplicate_tiff_numbers or projection_set.duplicate_angle_numbers)
+
+    if strict and has_duplicates:
+        return ScanReport(scan_directory=scan_directory,total_tiff_files=len(files),angle_data=angle_data,
+                          projection_set=projection_set,successfully_loaded=0,failed_projections=(),image_shape=None,image_dtype=None,is_valid=False,)
+    successfully_loaded = 0
+    failed_projections = []
+
+    image_shape = None
+    image_dtype = None
+
+    # 7. Load and validate projections one at a time
+    for number, angle, image in iter_projections(projection_set):
+        successfully_loaded += 1
+
+        if image_shape is None:
+            image_shape = image.shape
+            image_dtype = image.dtype

@@ -34,3 +34,6 @@ print("\nFiles with reading errors:", len(errors))
 
 for name, error in errors[:10]:
     print(name, error)
+
+
+    
