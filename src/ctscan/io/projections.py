@@ -189,10 +189,65 @@ def validate_scan(scan_directory: str | Path, angle_file: str | Path, strict: bo
     image_shape = None
     image_dtype = None
 
-    # 7. Load and validate projections one at a time
-    for number, angle, image in iter_projections(projection_set):
-        successfully_loaded += 1
+    
+  
+    if not ( len(projection_set.files) 
+            == len(projection_set.projection_numbers) 
+            == len(projection_set.angles)):
+        raise ValueError(
+            "Projection files, numbers and angles must have the same length."
+        )
 
-        if image_shape is None:
-            image_shape = image.shape
-            image_dtype = image.dtype
+    
+    for number, file in zip(projection_set.projection_numbers,projection_set.files):
+        try:
+            image = load_projection(
+                file,
+                expected_shape=image_shape,
+                expected_dtype=image_dtype,
+            )
+
+            successfully_loaded += 1
+
+            if image_shape is None:
+                image_shape = image.shape
+                image_dtype = image.dtype
+
+        except Exception as error:
+            failed_projections.append(
+                ProjectionError(
+                    projection_number=int(number),
+                    file=file,
+                    reason=str(error),
+                )
+            )
+
+            if strict:
+                break
+    has_malformed_angles = bool(angle_data.malformed_rows)
+    print("Malformed rows:", angle_data.malformed_rows)
+    print("Has malformed angles:", has_malformed_angles)
+    is_valid = (
+            len(projection_set.files) > 0
+            and not has_duplicates
+            and not has_malformed_angles
+            and not failed_projections
+            and successfully_loaded == len(projection_set.files)
+        )
+    
+    return ScanReport(
+        scan_directory=scan_directory,
+        total_tiff_files=len(files),
+        angle_data=angle_data,
+        projection_set=projection_set,
+        successfully_loaded=successfully_loaded,
+        failed_projections=tuple(failed_projections),
+        image_shape=image_shape,
+        image_dtype=image_dtype,
+        is_valid=is_valid
+    )
+
+
+
+
+

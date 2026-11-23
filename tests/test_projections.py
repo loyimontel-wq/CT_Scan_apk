@@ -461,6 +461,296 @@ def test_validate_scan_rejects_missing_angle_file(tmp_path):
     with pytest.raises(FileNotFoundError, match="Angle file"):
         validate_scan(scan_directory, tmp_path / "missing.ang")
 
+def test_validate_scan_success(tmp_path):
+    scan_directory = tmp_path / "scan"
+    scan_directory.mkdir()
+
+    # Create three TIFF projection images
+    for number in range(1, 4):
+        image = np.full((64, 64), number, dtype=np.uint16)
+
+        tifffile.imwrite(
+            scan_directory / f"scan_{number:04d}.tif",
+            image,
+        )
+
+    # Create the corresponding angle file
+    angle_file = tmp_path / "scan.ang"
+    angle_file.write_text(
+        "Proj\tAngle(deg)\n"
+        "1:\t0.100\n"
+        "2:\t0.200\n"
+        "3:\t0.300\n"
+    )
+
+    report = validate_scan(scan_directory, angle_file)
+
+    assert report.total_tiff_files == 3
+    assert report.successfully_loaded == 3
+
+    assert report.failed_projections == ()
+
+    assert report.image_shape == (64, 64)
+    assert report.image_dtype == np.dtype("uint16")
+
+    assert report.is_valid is True
+
+def test_validate_scan_strict_stops_at_first_failed_projection(tmp_path):
+    scan_directory = tmp_path / "scan"
+    scan_directory.mkdir()
+
+    # Projection 1: valid TIFF
+    image = np.full((64, 64), 1, dtype=np.uint16)
+    tifffile.imwrite(scan_directory / "scan_0001.tif", image)
+
+    # Projection 2: deliberately invalid TIFF
+    (scan_directory / "scan_0002.tif").write_text("not a valid TIFF")
+
+    # Projection 3: valid TIFF, but should never be reached
+    image = np.full((64, 64), 3, dtype=np.uint16)
+    tifffile.imwrite(scan_directory / "scan_0003.tif", image)
+
+    angle_file = tmp_path / "scan.ang"
+    angle_file.write_text(
+        "Proj\tAngle(deg)\n"
+        "1:\t0.100\n"
+        "2:\t0.200\n"
+        "3:\t0.300\n"
+    )
+
+    report = validate_scan(
+        scan_directory,
+        angle_file,
+        strict=True,
+    )
+
+    assert report.successfully_loaded == 1
+    assert len(report.failed_projections) == 1
+
+    assert report.failed_projections[0].projection_number == 2
+    assert report.failed_projections[0].file.name == "scan_0002.tif"
+
+    assert report.is_valid is False
+
+def test_validate_scan_tolerant_continues_after_failed_projection(tmp_path):
+    scan_directory = tmp_path / "scan"
+    scan_directory.mkdir()
+
+    # Projection 1: valid TIFF
+    image = np.full((64, 64), 1, dtype=np.uint16)
+    tifffile.imwrite(scan_directory / "scan_0001.tif", image)
+
+    # Projection 2: deliberately invalid TIFF
+    (scan_directory / "scan_0002.tif").write_text("not a valid TIFF")
+
+    # Projection 3: valid TIFF
+    image = np.full((64, 64), 3, dtype=np.uint16)
+    tifffile.imwrite(scan_directory / "scan_0003.tif", image)
+
+    angle_file = tmp_path / "scan.ang"
+    angle_file.write_text(
+        "Proj\tAngle(deg)\n"
+        "1:\t0.100\n"
+        "2:\t0.200\n"
+        "3:\t0.300\n"
+    )
+
+    report = validate_scan(
+        scan_directory,
+        angle_file,
+        strict=False,
+    )
+
+    assert report.successfully_loaded == 2
+    assert len(report.failed_projections) == 1
+
+    assert report.failed_projections[0].projection_number == 2
+
+    assert report.is_valid is False
+
+def test_validate_scan_strict_rejects_duplicate_tiff_numbers(tmp_path):
+    scan_directory = tmp_path / "scan"
+    scan_directory.mkdir()
+
+    # Two TIFF files have the same projection number.
+    image = np.full((64, 64), 1, dtype=np.uint16)
+    tifffile.imwrite(scan_directory / "scan_0001.tif", image)
+    tifffile.imwrite(scan_directory / "scan_0002.tif", image)
+    tifffile.imwrite(scan_directory / "duplicate_0002.tif", image)
+
+    angle_file = tmp_path / "scan.ang"
+    angle_file.write_text(
+        "Proj\tAngle(deg)\n"
+        "1:\t0.100\n"
+        "2:\t0.200\n"
+    )
+
+    report = validate_scan(
+        scan_directory,
+        angle_file,
+        strict=True,
+    )
+
+    assert report.successfully_loaded == 0
+    assert report.is_valid is False
+    assert report.projection_set.duplicate_tiff_numbers == (2,)
+
+def test_validate_scan_tolerant_handles_duplicate_tiff_numbers(tmp_path):
+    scan_directory = tmp_path / "scan"
+    scan_directory.mkdir()
+
+    image = np.full((64, 64), 1, dtype=np.uint16)
+
+    tifffile.imwrite(scan_directory / "scan_0001.tif", image)
+    tifffile.imwrite(scan_directory / "scan_0002.tif", image)
+    tifffile.imwrite(scan_directory / "duplicate_0002.tif", image)
+    tifffile.imwrite(scan_directory / "scan_0003.tif", image)
+
+    angle_file = tmp_path / "scan.ang"
+    angle_file.write_text(
+        "Proj\tAngle(deg)\n"
+        "1:\t0.100\n"
+        "2:\t0.200\n"
+        "3:\t0.300\n"
+    )
+
+    report = validate_scan(
+        scan_directory,
+        angle_file,
+        strict=False,
+    )
+
+    assert report.successfully_loaded == 2
+    assert report.projection_set.duplicate_tiff_numbers == (2,)
+    assert report.is_valid is False
+
+def test_validate_scan_strict_rejects_duplicate_angle_numbers(tmp_path):
+    scan_directory = tmp_path / "scan"
+    scan_directory.mkdir()
+
+    image = np.full((64, 64), 1, dtype=np.uint16)
+
+    tifffile.imwrite(scan_directory / "scan_0001.tif", image)
+    tifffile.imwrite(scan_directory / "scan_0002.tif", image)
+
+    angle_file = tmp_path / "scan.ang"
+    angle_file.write_text(
+        "Proj\tAngle(deg)\n"
+        "1:\t0.100\n"
+        "2:\t0.200\n"
+        "2:\t0.300\n"
+    )
+
+    report = validate_scan(
+        scan_directory,
+        angle_file,
+        strict=True,
+    )
+
+    assert report.successfully_loaded == 0
+    assert report.is_valid is False
+    assert report.projection_set.duplicate_angle_numbers == (2,)
+
+def test_validate_scan_tolerant_handles_duplicate_angle_numbers(tmp_path):
+    scan_directory = tmp_path / "scan"
+    scan_directory.mkdir()
+
+    image = np.full((64, 64), 1, dtype=np.uint16)
+
+    tifffile.imwrite(scan_directory / "scan_0001.tif", image)
+    tifffile.imwrite(scan_directory / "scan_0002.tif", image)
+    tifffile.imwrite(scan_directory / "scan_0003.tif", image)
+
+    angle_file = tmp_path / "scan.ang"
+    angle_file.write_text(
+        "Proj\tAngle(deg)\n"
+        "1:\t0.100\n"
+        "2:\t0.200\n"
+        "2:\t0.300\n"
+        "3:\t0.400\n"
+    )
+
+    report = validate_scan(
+        scan_directory,
+        angle_file,
+        strict=False,
+    )
+
+    assert report.successfully_loaded == 2
+    assert report.projection_set.duplicate_angle_numbers == (2,)
+    assert report.is_valid is False
+
+def test_validate_scan_no_matching_projections(tmp_path):
+    scan_directory = tmp_path / "scan"
+    scan_directory.mkdir()
+
+    image = np.full((64, 64), 1, dtype=np.uint16)
+
+    tifffile.imwrite(scan_directory / "scan_0001.tif", image)
+    tifffile.imwrite(scan_directory / "scan_0002.tif", image)
+
+    angle_file = tmp_path / "scan.ang"
+    angle_file.write_text(
+        "Proj\tAngle(deg)\n"
+        "10:\t0.100\n"
+        "11:\t0.200\n"
+    )
+
+    report = validate_scan(scan_directory, angle_file)
+
+    assert len(report.projection_set.files) == 0
+    assert report.successfully_loaded == 0
+    assert report.image_shape is None
+    assert report.image_dtype is None
+    assert report.is_valid is False
+
+def test_validate_scan_reports_invalid_filenames(tmp_path):
+    scan_directory = tmp_path / "scan"
+    scan_directory.mkdir()
+
+    image = np.full((64, 64), 1, dtype=np.uint16)
+
+    tifffile.imwrite(scan_directory / "scan_0001.tif", image)
+    tifffile.imwrite(scan_directory / "scan_0002.tif", image)
+    tifffile.imwrite(scan_directory / "projection_unknown.tif", image)
+
+    angle_file = tmp_path / "scan.ang"
+    angle_file.write_text(
+        "Proj\tAngle(deg)\n"
+        "1:\t0.100\n"
+        "2:\t0.200\n"
+    )
+
+    report = validate_scan(scan_directory, angle_file)
+
+    assert report.successfully_loaded == 2
+    assert len(report.projection_set.invalid_files) == 1
+    assert report.projection_set.invalid_files[0].name == "projection_unknown.tif"
+    assert report.is_valid is True
+
+def test_validate_scan_allows_missing_tiff_projection(tmp_path):
+    scan_directory = tmp_path / "scan"
+    scan_directory.mkdir()
+
+    image = np.full((64, 64), 1, dtype=np.uint16)
+
+    tifffile.imwrite(scan_directory / "scan_0001.tif", image)
+    tifffile.imwrite(scan_directory / "scan_0003.tif", image)
+
+    angle_file = tmp_path / "scan.ang"
+    angle_file.write_text(
+        "Proj\tAngle(deg)\n"
+        "1:\t0.100\n"
+        "2:\t0.200\n"
+        "3:\t0.300\n"
+    )
+
+    report = validate_scan(scan_directory, angle_file)
+
+    assert report.successfully_loaded == 2
+    assert report.projection_set.missing_tiff_numbers == (2,)
+    assert report.is_valid is True
+
 
 
 
